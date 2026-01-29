@@ -450,7 +450,7 @@ JsonObject HandleRequest(JsonDocument &doc) {
     }
   } else if (req[0] == "help" || req[0] == "") {
     for (int i = 0; i < reqmax; i++) {
-      root[groups[i]] = "http://../read/" + groups[i];
+      root[groups[i]] = "http://../[slaveID]/read/" + groups[i];
     }
     // Add custom endpoints
     root["wifi_scan"] = "http://../get/wifi/scan";
