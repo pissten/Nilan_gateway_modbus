@@ -665,6 +665,40 @@ void setup() {
     wifiRetries++;
   }
 
+  // Fallback to default SSID if custom one failed
+  if (WiFi.status() != WL_CONNECTED) {
+    String defaultSsid = WIFI_SSID;
+    String defaultPass = WIFI_PASSWORD;
+
+    // Retry with defaults if we were using different credentials
+    if ((wifiSsid != defaultSsid || wifiPassword != defaultPass) &&
+        defaultSsid != "") {
+      Serial.println("\nCustom WiFi failed. Trying default configuration...");
+      Serial.print("Default SSID: ");
+      Serial.println(defaultSsid);
+#ifdef M5STACK
+      M5.Lcd.println("\nFailed. Trying default...");
+#endif
+
+      WiFi.disconnect();
+      delay(1000);
+      WiFi.begin(defaultSsid.c_str(), defaultPass.c_str());
+
+      wifiRetries = 0;
+      while (WiFi.status() != WL_CONNECTED && wifiRetries < 20) {
+        delay(1000);
+        Serial.print(".");
+        wifiRetries++;
+      }
+
+      if (WiFi.status() == WL_CONNECTED) {
+        wifiSsid = defaultSsid;
+        wifiPassword = defaultPass;
+        Serial.println("\nConnected to Default WiFi!");
+      }
+    }
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nWiFi connection failed. Starting SoftAP...");
 #ifdef M5STACK
