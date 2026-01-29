@@ -683,26 +683,43 @@ void setup() {
 
   mqttClient.setServer(mqttServer.c_str(), 1883);
   mqttClient.setCallback(mqttCallback);
-  Serial.println("Connecting to MQTT...");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Connecting to MQTT...");
 #ifdef M5STACK
-  M5.Lcd.println("Connecting MQTT...");
+    M5.Lcd.println("Connecting MQTT...");
 #endif
-  mqttReconnect();
-  Serial.println("MQTT Connected!");
-  IPaddress = WiFi.localIP().toString();
+    mqttReconnect();
+    IPaddress = WiFi.localIP().toString();
+    Serial.println("MQTT Connected!");
 #ifdef M5STACK
-  M5.Lcd.println("MQTT Connected!");
-  delay(1000);
-  M5.Lcd.clear();
-  M5.Lcd.setCursor(0, 0);
-  M5.Lcd.println("Nilan Gateway");
-  M5.Lcd.print("IP: ");
-  M5.Lcd.println(IPaddress);
-  M5.Lcd.println("MQTT: Connected");
-  M5.Lcd.println("Modbus: Waiting...");
+    M5.Lcd.println("MQTT Connected!");
+    delay(1000);
+    M5.Lcd.clear();
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.println("Nilan Gateway");
+    M5.Lcd.print("IP: ");
+    M5.Lcd.println(IPaddress);
+    M5.Lcd.println("MQTT: Connected");
+    M5.Lcd.println("Modbus: Waiting...");
 #endif
-  mqttClient.publish("ventilation/gateway/boot", String(millis()).c_str());
-  mqttClient.publish("ventilation/gateway/ip", IPaddress.c_str());
+    mqttClient.publish("ventilation/gateway/boot", String(millis()).c_str());
+    mqttClient.publish("ventilation/gateway/ip", IPaddress.c_str());
+  } else {
+    Serial.println("Offline Mode (No WiFi) - Skipping MQTT");
+    IPaddress = WiFi.softAPIP().toString();
+#ifdef M5STACK
+    M5.Lcd.println("Skipping MQTT...");
+    delay(2000);
+    M5.Lcd.clear();
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.println("Nilan Gateway (AP)");
+    M5.Lcd.print("IP: ");
+    M5.Lcd.println(IPaddress);
+    M5.Lcd.println("Mode: Offline");
+    M5.Lcd.println("Modbus: Waiting...");
+#endif
+  }
 }
 
 #ifdef DEBUG_SCAN_TIME
@@ -749,11 +766,13 @@ void loop() {
     client.stop();
   }
 
-  if (!mqttClient.connected()) {
-    mqttReconnect();
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) {
+      mqttReconnect();
+    }
   }
 
-  if (mqttClient.connected()) {
+  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
     mqttClient.loop();
     long now = millis();
     if (now - lastMsg > MQTT_SEND_INTERVAL) {
