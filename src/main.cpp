@@ -399,6 +399,22 @@ JsonObject HandleRequest(JsonDocument &doc) {
 #else
     root["error"] = "Not supported on this platform";
 #endif
+  } else if (req[0] == "get" && req[1] == "wifi" && req[2] == "scan") {
+#ifdef ESP32
+    int n = WiFi.scanNetworks();
+    root["status"] = "scan done";
+    root["count"] = n;
+    if (n == 0) {
+      root["message"] = "no networks found";
+    } else {
+      for (int i = 0; i < n; ++i) {
+        root[String("ssid_") + i] = WiFi.SSID(i);
+        root[String("rssi_") + i] = WiFi.RSSI(i);
+      }
+    }
+#else
+    root["error"] = "Not supported on this platform";
+#endif
   } else if (req[0] == "get" && req[1] >= "0" && req[2] > "0") {
     int address = atoi(req[1].c_str());
     int nums = atoi(req[2].c_str());
@@ -431,6 +447,13 @@ JsonObject HandleRequest(JsonDocument &doc) {
     for (int i = 0; i < reqmax; i++) {
       root[groups[i]] = "http://../read/" + groups[i];
     }
+    // Add custom endpoints
+    root["wifi_scan"] = "http://../get/wifi/scan";
+    root["wifi_ssid_set"] = "http://../set/wifi/ssid/[ssid]";
+    root["wifi_pass_set"] = "http://../set/wifi/password/[pass]";
+    root["mqtt_server_set"] = "http://../set/mqtt/server/[ip]";
+    root["mqtt_user_set"] = "http://../set/mqtt/user/[user]";
+    root["mqtt_pass_set"] = "http://../set/mqtt/password/[pass]";
   }
   root["operation"] = req[0];
   root["group"] = req[1];
@@ -621,8 +644,8 @@ void setup() {
   // Wait for connection with timeout
   int wifiRetries = 0;
   while (WiFi.status() != WL_CONNECTED &&
-         wifiRetries < 20) { // 10 seconds timeout
-    delay(500);
+         wifiRetries < 20) { // 20 * 1000ms = 20 seconds timeout
+    delay(1000);             // Increased delay to 1s
     Serial.print(".");
     wifiRetries++;
   }
