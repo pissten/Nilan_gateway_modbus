@@ -401,6 +401,11 @@ JsonObject HandleRequest(JsonDocument &doc) {
 #endif
   } else if (req[0] == "get" && req[1] == "wifi" && req[2] == "scan") {
 #ifdef ESP32
+    // Ensure we are in a mode that supports scanning (STA or AP_STA)
+    if (WiFi.getMode() == WIFI_AP) {
+      WiFi.mode(WIFI_AP_STA);
+      delay(100);
+    }
     int n = WiFi.scanNetworks();
     root["status"] = "scan done";
     root["count"] = n;
@@ -605,13 +610,14 @@ void setup() {
   digitalWrite(WIFI_LED, LOW); // Reverse meaning. LOW=LED ON
 #endif
   delay(500);
-  WiFi.mode(WIFI_STA);
-  WiFi.hostname(host);
-  Serial.print("Connecting to WiFi SSID: ");
-  Serial.println(wifiSsid);
-#ifdef M5STACK
-  M5.Lcd.print("Connecting to: ");
-  M5.Lcd.println(wifiSsid);
+  // Load WiFi settings from Preferences
+#ifdef ESP32
+  String storedSsid = preferences.getString("wifi_ssid", "");
+  String storedWifiPass = preferences.getString("wifi_pass", "");
+  if (storedSsid.length() > 0)
+    wifiSsid = storedSsid;
+  if (storedWifiPass.length() > 0)
+    wifiPassword = storedWifiPass;
 #endif
 
 // Load MQTT settings from Preferences
@@ -629,17 +635,26 @@ void setup() {
     mqttPassword = storedPass;
 #endif
 
-  // Load WiFi settings from Preferences
-#ifdef ESP32
-  String storedSsid = preferences.getString("wifi_ssid", "");
-  String storedWifiPass = preferences.getString("wifi_pass", "");
-  if (storedSsid.length() > 0)
-    wifiSsid = storedSsid;
-  if (storedWifiPass.length() > 0)
-    wifiPassword = storedWifiPass;
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname(host);
+  // Ensure we start with a clean slate
+  WiFi.disconnect();
+  Serial.print("Connecting to WiFi SSID: ");
+  Serial.println(wifiSsid);
+  // Log password length for debugging (don't show actual password)
+  Serial.print("Password length: ");
+  Serial.println(wifiPassword.length());
+
+#ifdef M5STACK
+  M5.Lcd.print("Connecting to: ");
+  M5.Lcd.println(wifiSsid);
 #endif
 
-  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+  if (wifiSsid == "") {
+    Serial.println("No SSID configured!");
+  } else {
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+  }
 
   // Wait for connection with timeout
   int wifiRetries = 0;
