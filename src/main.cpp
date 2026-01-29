@@ -36,6 +36,10 @@
 #else
 #error "Unsupported platform"
 #endif
+#ifdef ESP32
+#include <Preferences.h>
+Preferences preferences;
+#endif
 #include "configuration.h"
 #include <ArduinoOTA.h>
 #include <ModbusMaster.h>
@@ -71,12 +75,14 @@ int scanCount = 0;
 SoftwareSerial SSerial(SERIAL_SOFTWARE_RX, SERIAL_SOFTWARE_TX); // RX, TX
 #endif
 
-const char *ssid = WIFI_SSID;
-const char *password = WIFI_PASSWORD;
+// WiFi variables (non-const to allow updates)
+String wifiSsid = WIFI_SSID;
+String wifiPassword = WIFI_PASSWORD;
 char chipID[12];
-const char *mqttServer = MQTT_SERVER;
-const char *mqttUsername = MQTT_USERNAME;
-const char *mqttPassword = MQTT_PASSWORD;
+// MQTT variables (non-const to allow updates)
+String mqttServer = MQTT_SERVER;
+String mqttUsername = MQTT_USERNAME;
+String mqttPassword = MQTT_PASSWORD;
 WiFiServer server(80);
 WiFiClient wifiClient;
 String IPaddress;
@@ -354,6 +360,45 @@ JsonObject HandleRequest(JsonDocument &doc) {
     root["result"] = (int)result;
     root["address"] = address;
     root["value"] = value;
+  } else if (req[0] == "set" && req[1] == "mqtt") {
+#ifdef ESP32
+    if (req[2] == "server" && req[3] != "") {
+      preferences.putString("mqtt_server", req[3]);
+      mqttServer = req[3];
+      root["result"] = "MQTT Server updated";
+      ESP.restart(); // Restart to apply
+    } else if (req[2] == "user" && req[3] != "") {
+      preferences.putString("mqtt_user", req[3]);
+      mqttUsername = req[3];
+      root["result"] = "MQTT User updated";
+      ESP.restart();
+    } else if (req[2] == "password" && req[3] != "") {
+      preferences.putString("mqtt_pass", req[3]);
+      mqttPassword = req[3];
+      root["result"] = "MQTT Password updated";
+      ESP.restart();
+    } else {
+      root["error"] = "Invalid MQTT setting";
+    }
+#else
+    root["error"] = "Not supported on this platform";
+#endif
+  } else if (req[0] == "set" && req[1] == "wifi") {
+#ifdef ESP32
+    if (req[2] == "ssid" && req[3] != "") {
+      preferences.putString("wifi_ssid", req[3]);
+      root["result"] = "WiFi SSID updated";
+      ESP.restart();
+    } else if (req[2] == "password" && req[3] != "") {
+      preferences.putString("wifi_pass", req[3]);
+      root["result"] = "WiFi Password updated";
+      ESP.restart();
+    } else {
+      root["error"] = "Invalid WiFi setting";
+    }
+#else
+    root["error"] = "Not supported on this platform";
+#endif
   } else if (req[0] == "get" && req[1] >= "0" && req[2] > "0") {
     int address = atoi(req[1].c_str());
     int nums = atoi(req[2].c_str());
@@ -395,7 +440,7 @@ JsonObject HandleRequest(JsonDocument &doc) {
 void mqttReconnect() {
   int numberRetries = 0;
   while (!mqttClient.connected() && numberRetries < 3) {
-    if (mqttClient.connect(chipID, mqttUsername, mqttPassword,
+    if (mqttClient.connect(chipID, mqttUsername.c_str(), mqttPassword.c_str(),
                            "ventilation/alive", 1, true, "0")) {
       mqttClient.publish("ventilation/alive", "1", true);
       mqttClient.subscribe("ventilation/cmd/+");
@@ -540,17 +585,62 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.hostname(host);
   Serial.print("Connecting to WiFi SSID: ");
-  Serial.println(ssid);
+  Serial.println(wifiSsid);
 #ifdef M5STACK
   M5.Lcd.print("Connecting to: ");
-  M5.Lcd.println(ssid);
+  M5.Lcd.println(wifiSsid);
 #endif
-  WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    delay(5000);
-    // Give up and do a reboot
-    ESP.restart();
+
+// Load MQTT settings from Preferences
+#ifdef ESP32
+  preferences.begin("nilan-config", false); // Read-only false = Read/Write
+  String storedServer = preferences.getString("mqtt_server", "");
+  String storedUser = preferences.getString("mqtt_user", "");
+  String storedPass = preferences.getString("mqtt_pass", "");
+
+  if (storedServer.length() > 0)
+    mqttServer = storedServer;
+  if (storedUser.length() > 0)
+    mqttUsername = storedUser;
+  if (storedPass.length() > 0)
+    mqttPassword = storedPass;
+#endif
+
+  // Load WiFi settings from Preferences
+#ifdef ESP32
+  String storedSsid = preferences.getString("wifi_ssid", "");
+  String storedWifiPass = preferences.getString("wifi_pass", "");
+  if (storedSsid.length() > 0)
+    wifiSsid = storedSsid;
+  if (storedWifiPass.length() > 0)
+    wifiPassword = storedWifiPass;
+#endif
+
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+
+  // Wait for connection with timeout
+  int wifiRetries = 0;
+  while (WiFi.status() != WL_CONNECTED &&
+         wifiRetries < 20) { // 10 seconds timeout
+    delay(500);
+    Serial.print(".");
+    wifiRetries++;
   }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi connection failed. Starting SoftAP...");
+#ifdef M5STACK
+    M5.Lcd.println("WiFi Failed!");
+    M5.Lcd.println("Starting AP: NilanGW");
+#endif
+    WiFi.softAP("NilanGW"); // Open network
+    IPaddress = WiFi.softAPIP().toString();
+  } else {
+    Serial.println("\nWiFi Connected!");
+    IPaddress = WiFi.localIP().toString();
+  }
+
+// Common cleanup
 #if defined(M5STACK)
 #elif defined(USE_WIFI_LED) && defined(WIFI_LED)
   digitalWrite(WIFI_LED, HIGH);
@@ -558,7 +648,12 @@ void setup() {
   ArduinoOTA.setHostname(host);
   ArduinoOTA.begin();
   server.begin();
-  Serial.println("WiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(IPaddress);
+#ifdef M5STACK
+  M5.Lcd.print("IP: ");
+  M5.Lcd.println(IPaddress);
+#endif
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 #ifdef M5STACK
@@ -569,24 +664,24 @@ void setup() {
 
 #if SERIAL_CHOICE == SERIAL_SOFTWARE
 #warning Compiling for software serial
-  SSerial.begin(19200, SWSERIAL_8E1);
+  SSerial.begin(MODBUS_BAUD, SWSERIAL_8E1);
   node.begin(MODBUS_SLAVE_ADDRESS, SSerial);
 #elif SERIAL_CHOICE == SERIAL_HARDWARE
 #warning Compiling for hardware serial
 #ifdef M5STACK
   // M5Stack Core with COMMU module uses Serial2 (RX=16, TX=17) for RS485 by
   // default
-  Serial2.begin(19200, SERIAL_8E1, 16, 17);
+  Serial2.begin(MODBUS_BAUD, MODBUS_CONFIG, 16, 17);
   node.begin(MODBUS_SLAVE_ADDRESS, Serial2);
 #else
-  Serial.begin(19200, SERIAL_8E1);
+  Serial.begin(MODBUS_BAUD, MODBUS_CONFIG);
   node.begin(MODBUS_SLAVE_ADDRESS, Serial);
 #endif
 #else
 #error hardware og serial serial port?
 #endif
 
-  mqttClient.setServer(mqttServer, 1883);
+  mqttClient.setServer(mqttServer.c_str(), 1883);
   mqttClient.setCallback(mqttCallback);
   Serial.println("Connecting to MQTT...");
 #ifdef M5STACK

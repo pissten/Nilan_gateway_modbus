@@ -43,6 +43,14 @@
 // Modbus address of the unit (possible to be changed via config)
 #define MODBUS_SLAVE_ADDRESS 2 // Default is 30
 
+// Modbus Serial Configuration
+#ifndef MODBUS_BAUD
+#define MODBUS_BAUD 19200
+#endif
+#ifndef MODBUS_CONFIG
+#define MODBUS_CONFIG SERIAL_8E1
+#endif
+
 #if CONFIGURED == 0
 #error "Default configuration used - won't upload to avoid loosing connection."
 #endif
