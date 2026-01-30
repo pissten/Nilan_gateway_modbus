@@ -5,3 +5,5 @@
 .vscode/ipch
 secrets.ini
 logs/*
+git-scrub.sh
+.env
