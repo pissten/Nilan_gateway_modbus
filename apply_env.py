@@ -32,6 +32,6 @@ for secret in secrets:
     value = os.environ.get(secret)
     if value:
         # Stringify the value for C++
-        defines.append((secret, f'"{value}"'))
+        defines.append((secret, f'\\"{value}\\"'))
 
 env.Append(CPPDEFINES=defines)

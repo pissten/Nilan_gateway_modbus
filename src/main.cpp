@@ -377,9 +377,11 @@ JsonObject HandleRequest(JsonDocument &doc) {
       mqttPassword = req[3];
       root["result"] = "MQTT Password updated";
       ESP.restart();
+      ESP.restart(); // Restart to apply
     } else {
       root["error"] = "Invalid MQTT setting";
     }
+    shouldRetryMqtt = true; // Retry connection with new settings
 #else
     root["error"] = "Not supported on this platform";
 #endif
@@ -465,13 +467,18 @@ JsonObject HandleRequest(JsonDocument &doc) {
   return root;
 }
 
+bool shouldRetryMqtt = true;
+
 void mqttReconnect() {
+  if (!shouldRetryMqtt) {
+    return;
+  }
   int numberRetries = 0;
   while (!mqttClient.connected() && numberRetries < 3) {
     if (mqttClient.connect(chipID, mqttUsername.c_str(), mqttPassword.c_str(),
                            "ventilation/alive", 1, true, "0")) {
       mqttClient.publish("ventilation/alive", "1", true);
-      mqttClient.subscribe("ventilation/cmd/+");
+      mqttClient.subscribe("ventilation/cmd/#");
       return;
     } else {
       delay(1000);
@@ -480,8 +487,13 @@ void mqttReconnect() {
   }
   if (numberRetries >= 3) {
     delay(5000);
-    // Give up and do a reboot
-    ESP.restart();
+    // Give up and wait for user interaction (config change)
+    shouldRetryMqtt = false;
+    Serial.println("MQTT Failed - Pausing retries until config change");
+#ifdef M5STACK
+    M5.Lcd.println("MQTT Failed");
+    M5.Lcd.println("Pausing retries.");
+#endif
   }
 }
 
@@ -490,37 +502,81 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) {
     inputString += (char)payload[i];
   }
+
+  String topicStr = String(topic);
+  String cmd = "";
+  int slaveID = -1;
+
+  // Expected formats:
+  // ventilation/cmd/{slaveID}/{command}
+  // ventilation/cmd/{command} (legacy)
+
+  if (topicStr.startsWith("ventilation/cmd/")) {
+    String suffix = topicStr.substring(16); // Remove prefix
+    int slashIndex = suffix.indexOf('/');
+
+    if (slashIndex > 0) {
+      // Format: {slaveID}/{command}
+      String idStr = suffix.substring(0, slashIndex);
+      if (isDigit(idStr.charAt(0))) {
+        slaveID = idStr.toInt();
+      }
+      cmd = suffix.substring(slashIndex + 1);
+    } else {
+      // Format: {command}
+      cmd = suffix;
+      // Force default slave ID for legacy commands
+      slaveID = MODBUS_SLAVE_ADDRESS;
+    }
+
+    if (slaveID > 0) {
+      // Switch to target slave ID
+#if SERIAL_CHOICE == SERIAL_SOFTWARE
+      node.begin(slaveID, SSerial);
+#elif SERIAL_CHOICE == SERIAL_HARDWARE
+#ifdef M5STACK
+      node.begin(slaveID, Serial2);
+#else
+      node.begin(slaveID, Serial);
+#endif
+#endif
+    }
+  } else {
+    mqttClient.publish("ventilation/error/topic", topic);
+    return;
+  }
+
   // Check if topic is equal to string
-  if (strcmp(topic, "ventilation/cmd/ventset") == 0) {
+  if (cmd == "ventset") {
     if (length == 1 && payload[0] >= '0' && payload[0] <= '4') {
       int16_t speed = payload[0] - '0';
       WriteModbus(VENTSET, speed);
       mqttClient.publish("ventilation/cmd/ventset", "", true);
     }
-  } else if (strcmp(topic, "ventilation/cmd/modeset") == 0) {
+  } else if (cmd == "modeset") {
     if (length == 1 && payload[0] >= '0' && payload[0] <= '4') {
       int16_t mode = payload[0] - '0';
       WriteModbus(MODESET, mode);
       mqttClient.publish("ventilation/cmd/modeset", "", true);
     }
-  } else if (strcmp(topic, "ventilation/cmd/runset") == 0) {
+  } else if (cmd == "runset") {
     if (length == 1 && payload[0] >= '0' && payload[0] <= '1') {
       int16_t run = payload[0] - '0';
       WriteModbus(RUNSET, run);
       mqttClient.publish("ventilation/cmd/runset", "", true);
     }
-  } else if (strcmp(topic, "ventilation/cmd/tempset") == 0) {
+  } else if (cmd == "tempset") {
     if (length == 4 && payload[0] >= '0' && payload[0] <= '2') {
       WriteModbus(TEMPSET, inputString.toInt());
       mqttClient.publish("ventilation/cmd/tempset", "", true);
     }
-  } else if (strcmp(topic, "ventilation/cmd/programset") == 0) {
+  } else if (cmd == "programset") {
     if (length == 1 && payload[0] >= '0' && payload[0] <= '4') {
       int16_t program = payload[0] - '0';
       WriteModbus(PROGRAMSET, program);
       mqttClient.publish("ventilation/cmd/programset", "", true);
     }
-  } else if (strcmp(topic, "ventilation/cmd/update") == 0) {
+  } else if (cmd == "update") {
     // Enter mode in 60 seconds to prioritize OTA
     if (payload[0] == '1') {
       mqttClient.publish("ventilation/cmd/update", "2");
@@ -529,16 +585,17 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
         delay(200);
       }
       if (!mqttClient.connected()) {
+        shouldRetryMqtt = true; // Force retry if disconnected
         mqttReconnect();
       }
     }
     mqttClient.publish("ventilation/cmd/update", "0");
-  } else if (strcmp(topic, "ventilation/cmd/reboot") == 0) {
+  } else if (cmd == "reboot") {
     if (payload[0] == '1') {
       mqttClient.publish("ventilation/cmd/reboot", "0");
       ESP.restart();
     }
-  } else if (strcmp(topic, "ventilation/cmd/version") == 0) {
+  } else if (cmd == "version") {
     if (inputString != String(COMPILED)) {
       mqttClient.publish(topic, String(COMPILED).c_str());
     }
@@ -772,20 +829,35 @@ void setup() {
 #endif
     mqttReconnect();
     IPaddress = WiFi.localIP().toString();
-    Serial.println("MQTT Connected!");
+    if (mqttClient.connected()) {
+      Serial.println("MQTT Connected!");
 #ifdef M5STACK
-    M5.Lcd.println("MQTT Connected!");
-    delay(1000);
-    M5.Lcd.clear();
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println("Nilan Gateway");
-    M5.Lcd.print("IP: ");
-    M5.Lcd.println(IPaddress);
-    M5.Lcd.println("MQTT: Connected");
-    M5.Lcd.println("Modbus: Waiting...");
+      M5.Lcd.println("MQTT Connected!");
+      delay(1000);
+      M5.Lcd.clear();
+      M5.Lcd.setCursor(0, 0);
+      M5.Lcd.println("Nilan Gateway");
+      M5.Lcd.print("IP: ");
+      M5.Lcd.println(IPaddress);
+      M5.Lcd.println("MQTT: Connected");
+      M5.Lcd.println("Modbus: Waiting...");
 #endif
-    mqttClient.publish("ventilation/gateway/boot", String(millis()).c_str());
-    mqttClient.publish("ventilation/gateway/ip", IPaddress.c_str());
+      mqttClient.publish("ventilation/gateway/boot", String(millis()).c_str());
+      mqttClient.publish("ventilation/gateway/ip", IPaddress.c_str());
+    } else {
+      Serial.println("MQTT Failed!");
+#ifdef M5STACK
+      M5.Lcd.println("MQTT Failed!");
+      delay(1000);
+      M5.Lcd.clear();
+      M5.Lcd.setCursor(0, 0);
+      M5.Lcd.println("Nilan Gateway");
+      M5.Lcd.print("IP: ");
+      M5.Lcd.println(IPaddress);
+      M5.Lcd.println("MQTT: Disconnected");
+      M5.Lcd.println("Modbus: Waiting...");
+#endif
+    }
   } else {
     Serial.println("Offline Mode (No WiFi) - Skipping MQTT");
     IPaddress = WiFi.softAPIP().toString();
