@@ -80,6 +80,7 @@ String wifiSsid = WIFI_SSID;
 String wifiPassword = WIFI_PASSWORD;
 char chipID[12];
 // MQTT variables (non-const to allow updates)
+bool shouldRetryMqtt = true;
 String mqttServer = MQTT_SERVER;
 String mqttUsername = MQTT_USERNAME;
 String mqttPassword = MQTT_PASSWORD;
@@ -466,8 +467,6 @@ JsonObject HandleRequest(JsonDocument &doc) {
   root["group"] = req[1];
   return root;
 }
-
-bool shouldRetryMqtt = true;
 
 void mqttReconnect() {
   if (!shouldRetryMqtt) {
