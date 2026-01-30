@@ -612,6 +612,8 @@ void setup() {
   delay(500);
   // Load WiFi settings from Preferences
 #ifdef ESP32
+  preferences.begin("nilan-config", false); // Read-only false = Read/Write
+
   String storedSsid = preferences.getString("wifi_ssid", "");
   String storedWifiPass = preferences.getString("wifi_pass", "");
   if (storedSsid.length() > 0)
@@ -622,7 +624,7 @@ void setup() {
 
 // Load MQTT settings from Preferences
 #ifdef ESP32
-  preferences.begin("nilan-config", false); // Read-only false = Read/Write
+  // Preferences already started above
   String storedServer = preferences.getString("mqtt_server", "");
   String storedUser = preferences.getString("mqtt_user", "");
   String storedPass = preferences.getString("mqtt_pass", "");
@@ -639,6 +641,7 @@ void setup() {
   WiFi.hostname(host);
   // Ensure we start with a clean slate
   WiFi.disconnect();
+  delay(1000); // Wait for radio to clear
   Serial.print("Connecting to WiFi SSID: ");
   Serial.println(wifiSsid);
   // Log password length for debugging (don't show actual password)
@@ -659,8 +662,8 @@ void setup() {
   // Wait for connection with timeout
   int wifiRetries = 0;
   while (WiFi.status() != WL_CONNECTED &&
-         wifiRetries < 20) { // 20 * 1000ms = 20 seconds timeout
-    delay(1000);             // Increased delay to 1s
+         wifiRetries < 5) { // 5 * 1000ms = 5 seconds timeout
+    delay(1000);            // Increased delay to 1s
     Serial.print(".");
     wifiRetries++;
   }
@@ -695,6 +698,12 @@ void setup() {
         wifiSsid = defaultSsid;
         wifiPassword = defaultPass;
         Serial.println("\nConnected to Default WiFi!");
+
+        // SELF-HEALING: Overwrite bad preferences with working default
+        Serial.println(
+            "Self-Healing: Updating preferences with working defaults...");
+        preferences.putString("wifi_ssid", defaultSsid);
+        preferences.putString("wifi_pass", defaultPass);
       }
     }
   }
@@ -831,7 +840,7 @@ void loop() {
   if (client) {
     bool success = readRequest(client);
     if (success) {
-      StaticJsonDocument<1000> doc;
+      StaticJsonDocument<4096> doc;
       HandleRequest(doc);
       writeResponse(client, doc);
     }
